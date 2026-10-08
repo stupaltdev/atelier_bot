@@ -291,7 +291,7 @@ async def on_ready():
 
 
 if __name__ == "__main__":
-    token = "YOUR_CHOP_TOKEN_HERE"
+    token = os.environ.get("DISCORD_TOKEN")
     if not token:
         raise SystemExit("Set the DISCORD_TOKEN environment variable first.")
     bot.run(token)
