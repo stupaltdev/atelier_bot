@@ -1,0 +1,4 @@
+py-cord>=2.6
+Pillow>=10.0
+opencv-python-headless>=4.8
+numpy
