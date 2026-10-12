@@ -1,6 +1,7 @@
 import asyncio
 import io
 import os
+import tempfile
 from pathlib import Path
 import random
 import cv2
@@ -15,6 +16,9 @@ MARGIN_RATIO = 0.02  # gap between sticker and image edge, as fraction of image 
 DETECT_MAX_SIDE = 2048  # downscale big images before face detection, for speed
 FACE_MODEL = HEALING_DIR / "face_detection_yunet_2023mar.onnx"
 FACE_MIN_SCORE = 0.7  # YuNet confidence needed to count as a face
+VIDEO_MAX_SECONDS = 10  # longer videos are cut off, to keep the GIF small
+VIDEO_MAX_FPS = 15
+VIDEO_MAX_WIDTH = 480
 
 CORNERS = ["top left", "top right", "bottom left", "bottom right"]
 OUTPUT_FORMATS = ["gif", "jpeg"]
@@ -130,6 +134,64 @@ def apply_sticker(
     return render(src, fmt, stamp, keep=sticker)
 
 
+def video_to_gif(
+    video_bytes: bytes, sticker_path: Path, corner: str, size_pct: float
+) -> io.BytesIO:
+    """Convert a video to a looping GIF with the sticker stamped on every frame."""
+    with tempfile.NamedTemporaryFile(suffix=".video") as tmp:
+        tmp.write(video_bytes)
+        tmp.flush()
+        cap = cv2.VideoCapture(tmp.name)
+        try:
+            if not cap.isOpened():
+                raise ValueError("couldn't read that video")
+            fps = cap.get(cv2.CAP_PROP_FPS) or VIDEO_MAX_FPS
+            fps = min(fps, VIDEO_MAX_FPS)
+            step = (cap.get(cv2.CAP_PROP_FPS) or fps) / fps
+            max_frames = round(VIDEO_MAX_SECONDS * fps)
+
+            frames, sticker, pos, index, next_keep = [], None, (0, 0), 0, 0.0
+            while len(frames) < max_frames:
+                ok, bgr = cap.read()
+                if not ok:
+                    break
+                index += 1
+                if index - 1 < next_keep:
+                    continue  # drop frames to hit the target frame rate
+                next_keep += step
+
+                frame = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+                if frame.width > VIDEO_MAX_WIDTH:
+                    h = round(frame.height * VIDEO_MAX_WIDTH / frame.width)
+                    frame = frame.resize((VIDEO_MAX_WIDTH, h), Image.LANCZOS)
+                frame = frame.convert("RGBA")
+
+                if sticker is None:
+                    sticker = Image.open(sticker_path).convert("RGBA")
+                    new_w = max(1, round(frame.width * size_pct / 100))
+                    new_h = max(1, round(sticker.height * new_w / sticker.width))
+                    sticker = sticker.resize((new_w, new_h), Image.LANCZOS)
+                    margin = round(frame.width * MARGIN_RATIO)
+                    x = margin if "left" in corner else frame.width - new_w - margin
+                    y = margin if "top" in corner else frame.height - new_h - margin
+                    pos = (max(0, x), max(0, y))
+
+                frame.alpha_composite(sticker, pos)
+                frames.append(quantize(frame.convert("RGB"), sticker))
+        finally:
+            cap.release()
+
+    if not frames:
+        raise ValueError("that video has no frames")
+    out = io.BytesIO()
+    frames[0].save(
+        out, "GIF", save_all=True, append_images=frames[1:],
+        duration=round(1000 / fps), loop=0, disposal=2,
+    )
+    out.seek(0)
+    return out
+
+
 def find_eyes(frame: Image.Image) -> list[tuple[complex, complex]]:
     """(left eye, right eye) centres, as x + yj, for every face found in the frame."""
     scale = min(1.0, DETECT_MAX_SIDE / max(frame.size))
@@ -224,6 +286,44 @@ async def sticker(
         return
 
     await ctx.followup.send(file=discord.File(result, filename=f"stickered.{EXTENSIONS[output_format]}"))
+
+@bot.slash_command(name="stickervideo", description="Put a sticker in a corner of your video, as a GIF")
+async def sticker_video(
+    ctx: discord.ApplicationContext,
+    video: discord.Option(discord.Attachment, "The video to stamp"),
+    sticker: discord.Option(
+        str, "Which sticker to use", autocomplete=sticker_autocomplete
+    ),
+    corner: discord.Option(
+        str, "Which corner (default: top left)", choices=CORNERS, default="top left"
+    ),
+    size: discord.Option(
+        int,
+        "Sticker width as % of video width (default: 50)",
+        min_value=1,
+        max_value=100,
+        default=50,
+    ),
+):
+    if sticker not in STICKERS:
+        await ctx.respond(
+            f"Unknown sticker. Choose one of: {', '.join(STICKERS)}", ephemeral=True
+        )
+        return
+    if not (video.content_type or "").startswith("video/"):
+        await ctx.respond("That attachment isn't a video.", ephemeral=True)
+        return
+
+    await ctx.defer()
+    try:
+        data = await video.read()
+        result = await asyncio.to_thread(video_to_gif, data, STICKERS[sticker], corner, size)
+    except Exception as e:
+        await ctx.followup.send(f"Couldn't process that video: {e}")
+        return
+
+    await ctx.followup.send(file=discord.File(result, filename="stickered.gif"))
+
 
 @bot.slash_command(name='howgay', description='Let the Atelier bot estimate how much of a homosexual you are')
 async def howgay(
