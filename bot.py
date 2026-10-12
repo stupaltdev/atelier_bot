@@ -21,7 +21,7 @@ VIDEO_MAX_FPS = 15
 VIDEO_MAX_WIDTH = 480
 
 TINT_COLORS = {
-    "atelier pink": "#ff8fc7",
+    "atelier pink": "#e43dac",
     "red": "#ff3b30",
     "orange": "#ff9500",
     "yellow": "#ffd60a",
