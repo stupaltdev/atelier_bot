@@ -14,6 +14,8 @@ HEALING_DIR = Path(__file__).parent / "healing-assets"
 STICKER_EXTS = {".png", ".jpg", ".jpeg"}
 MARGIN_RATIO = 0.02  # gap between sticker and image edge, as fraction of image width
 DETECT_MAX_SIDE = 2048  # downscale big images before face detection, for speed
+LOGO_PATH = Path(__file__).parent / "assets" / "atelier_logo.png"
+ATELIER_PINK = discord.Colour(0xE43DAC)
 FACE_MODEL = HEALING_DIR / "face_detection_yunet_2023mar.onnx"
 FACE_MIN_SCORE = 0.7  # YuNet confidence needed to count as a face
 VIDEO_MAX_SECONDS = 10  # longer videos are cut off, to keep the GIF small
@@ -476,6 +478,26 @@ async def healing(
 @bot.slash_command(name="ping", description="Pong")
 async def ping(ctx: discord.ApplicationContext):
     await ctx.respond(f"Pong!")
+
+
+@bot.slash_command(name="help", description="List everything the Atelier bot can do")
+async def help_command(ctx: discord.ApplicationContext):
+    logo = discord.File(LOGO_PATH, filename="atelier_logo.png")
+    embed = discord.Embed(
+        title="Atelier Bot — Commands",
+        description="Everything I can do:",
+        colour=ATELIER_PINK,
+    )
+    embed.set_thumbnail(url="attachment://atelier_logo.png")
+    for cmd in sorted(bot.pending_application_commands, key=lambda c: c.name):
+        if not isinstance(cmd, discord.SlashCommand):
+            continue
+        options = " ".join(
+            f"<{o.name}>" if o.required else f"[{o.name}]" for o in cmd.options
+        )
+        embed.add_field(name=f"/{cmd.name} {options}".strip(), value=cmd.description, inline=False)
+    embed.set_footer(text="<required> [optional]", icon_url="attachment://atelier_logo.png")
+    await ctx.respond(embed=embed, file=logo)
 
 
 @bot.event
